@@ -1,8 +1,8 @@
-﻿using Microsoft.Extensions.Options;
-using RealtimeApi.Configurations;
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Microsoft.Extensions.Options;
+using RealtimeApi.Configurations;
 
 namespace RealtimeApi.Services;
 
