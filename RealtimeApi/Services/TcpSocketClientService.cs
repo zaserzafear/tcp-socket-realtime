@@ -84,7 +84,10 @@ public class TcpSocketClientService : BackgroundService
                 }
 
                 var receivedText = _encoding.GetString(buffer, 0, bytesRead);
-                _logger.LogInformation(receivedText);
+                if (_tcpClientSetting.WriteLogRecievedMessage)
+                {
+                    _logger.LogInformation(receivedText);
+                }
                 await tcpServerManager.BroadcastMessageAsync(receivedText);
             }
             catch (IOException ex)
