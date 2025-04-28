@@ -11,9 +11,9 @@ public class TcpServerFactory
         _loggerFactory = loggerFactory;
     }
 
-    public TcpServerService Create(IPAddress address, int port = 5000)
+    public TcpServerService Create(IPAddress address, int port = 5000, int bufferSize = 4096)
     {
         var logger = _loggerFactory.CreateLogger<TcpServerService>();
-        return new TcpServerService(logger, address, port);
+        return new TcpServerService(logger, address, port, bufferSize);
     }
 }

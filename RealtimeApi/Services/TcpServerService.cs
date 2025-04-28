@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using System.Buffers;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -8,118 +9,151 @@ namespace RealtimeApi.Services;
 public class TcpServerService
 {
     private readonly ILogger<TcpServerService> _logger;
-    private readonly TcpListener _listener;
     private readonly string _serverIdentity;
     private readonly int _port;
-    private readonly ConcurrentDictionary<string, TcpClient> _clients = new();
+    private readonly int _bufferSize;
+    private readonly ConcurrentDictionary<string, Socket> _clients = new();
     private int _maxConnections = 0;
+
+    private Socket _listenerSocket;
 
     public int CurrentConnectionCount => _clients.Count;
     public int Port => _port;
 
-    public TcpServerService(ILogger<TcpServerService> logger, IPAddress address, int port)
+    public TcpServerService(ILogger<TcpServerService> logger, IPAddress address, int port, int bufferSize)
     {
         _logger = logger;
-        _port = port;
         _serverIdentity = $"{address}:{port}";
+        _port = port;
+        _bufferSize = bufferSize;
 
-        LogInformation("Initializing TCP Server...");
-        _listener = new TcpListener(address, port);
+        _logger.LogInformation($"[{_serverIdentity}] Initializing TCP Server...");
+        _listenerSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
+        {
+            NoDelay = true,
+        };
+        _listenerSocket.Bind(new IPEndPoint(address, port));
     }
 
-    public async Task StartAsync(CancellationToken stoppingToken)
+    public async Task StartAsync(int backlog, CancellationToken stoppingToken)
     {
-        _listener.Start();
-        LogInformation("TCP Server started.");
+        _listenerSocket.Listen(backlog);
+        _logger.LogInformation($"[{_serverIdentity}] TCP Server started with backlog {backlog}.");
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var client = await _listener.AcceptTcpClientAsync(stoppingToken);
-                var endpoint = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
+                var clientSocket = await _listenerSocket.AcceptAsync(stoppingToken);
+                _ = HandleClientAsync(clientSocket);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogInformation(ex, $"[{_serverIdentity}] Error accepting client.");
+            }
+        }
+    }
 
-                if (_clients.TryAdd(endpoint, client))
+    public async Task HandleClientAsync(Socket clientSocket)
+    {
+        var endpoint = clientSocket.RemoteEndPoint?.ToString();
+
+        if (string.IsNullOrEmpty(endpoint))
+        {
+            _logger.LogWarning($"[{_serverIdentity}] Client socket has no endpoint. Closing.");
+            clientSocket.Dispose();
+            return;
+        }
+
+        if (!_clients.TryAdd(endpoint, clientSocket))
+        {
+            _logger.LogWarning($"[{_serverIdentity}] Failed to add client {endpoint} to clients dictionary.");
+            clientSocket.Dispose();
+            return;
+        }
+
+        UpdateMaxConnections();
+        _logger.LogInformation($"[{_serverIdentity}] Client connected: {endpoint}. Current: {_clients.Count}, Max: {_maxConnections}");
+
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
+        try
+        {
+            while (true)
+            {
+                int bytesReceived;
+                try
                 {
-                    UpdateMaxConnections();
-                    LogInformation("Client connected: {Endpoint}. Current: {CurrentConnections}, Max: {MaxConnections}",
-                        endpoint, _clients.Count, _maxConnections);
+                    bytesReceived = await clientSocket.ReceiveAsync(buffer, SocketFlags.None);
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    _logger.LogWarning($"[{_serverIdentity}] Client {endpoint} forcibly closed the connection.");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, $"[{_serverIdentity}] Unexpected error handling client {endpoint}.");
+                    break;
+                }
 
-                    _ = HandleClientAsync(client, endpoint, stoppingToken);
+                if (bytesReceived == 0)
+                {
+                    _logger.LogInformation($"[{_serverIdentity}] Client {endpoint} disconnected (gracefully).");
+                    break;
+                }
+
+                var request = Encoding.UTF8.GetString(buffer.AsSpan(0, bytesReceived));
+                _logger.LogInformation($"[{_serverIdentity}] Received from {endpoint}: {request}");
+
+                var response = Encoding.UTF8.GetBytes("ACK: " + request);
+                await clientSocket.SendAsync(response, SocketFlags.None);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+
+            RemoveClient(endpoint);
+
+            try
+            {
+                if (clientSocket.Connected)
+                {
+                    clientSocket.Shutdown(SocketShutdown.Both);
                 }
             }
             catch (Exception ex)
             {
-                LogError(ex, "Error accepting client.");
+                _logger.LogWarning(ex, $"[{_serverIdentity}] Error shutting down client socket {endpoint}.");
+            }
+            finally
+            {
+                clientSocket.Dispose();
             }
         }
     }
 
-    public void HandleExternalClient(TcpClient client, CancellationToken cancellationToken)
+    private void RemoveClient(string endpoint)
     {
-        var endpoint = client.Client.RemoteEndPoint?.ToString() ?? Guid.NewGuid().ToString();
-
-        if (_clients.TryAdd(endpoint, client))
+        if (_clients.TryRemove(endpoint, out var clientSocket))
         {
-            UpdateMaxConnections();
-            LogInformation($"External client connected: {endpoint}. Current: {_clients.Count}, Max: {_maxConnections}");
-
-            _ = HandleClientAsync(client, endpoint, cancellationToken);
-        }
-    }
-
-    public async Task BroadcastMessageAsync(string message)
-    {
-        var data = Encoding.UTF8.GetBytes(message);
-
-        var tasks = _clients.Values
-            .Where(c => c.Connected)
-            .Select(async client =>
+            try
             {
-                try
+                if (clientSocket.Connected)
                 {
-                    var stream = client.GetStream();
-                    await stream.WriteAsync(data, 0, data.Length);
+                    clientSocket.Shutdown(SocketShutdown.Both);
                 }
-                catch (Exception ex)
-                {
-                    LogError(ex, "Error sending message to client.");
-                }
-            });
-
-        await Task.WhenAll(tasks);
-    }
-
-    private async Task HandleClientAsync(TcpClient client, string endpoint, CancellationToken token)
-    {
-        using var stream = client.GetStream();
-        var buffer = new byte[4096];
-
-        try
-        {
-            while (!token.IsCancellationRequested)
-            {
-                int bytesRead = await stream.ReadAsync(buffer, token);
-                if (bytesRead == 0) break;
-
-                var request = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                LogInformation("Received from {Endpoint}: {Message}", endpoint, request);
-
-                var response = Encoding.UTF8.GetBytes("ACK: " + request);
-                await stream.WriteAsync(response, token);
             }
-        }
-        catch (Exception ex)
-        {
-            LogError(ex, "Error handling client {Endpoint}", endpoint);
-        }
-        finally
-        {
-            _clients.TryRemove(endpoint, out _);
-            LogInformation("Client disconnected: {Endpoint}. Current: {CurrentConnections}, Max: {MaxConnections}",
-                endpoint, _clients.Count, _maxConnections);
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"[{_serverIdentity}] Error shutting down client {endpoint}");
+            }
+            finally
+            {
+                clientSocket.Dispose();
+            }
 
-            client.Close();
+            _logger.LogInformation($"[{_serverIdentity}] Client disconnected: {endpoint}. Current: {_clients.Count}, Max: {_maxConnections}");
         }
     }
 
@@ -128,26 +162,53 @@ public class TcpServerService
         _maxConnections = Math.Max(_clients.Count, _maxConnections);
     }
 
+    public async Task BroadcastMessageAsync(byte[] data)
+    {
+        var disconnectedClients = new List<string>();
+
+        foreach (var kvp in _clients)
+        {
+            var clientSocket = kvp.Value;
+
+            if (clientSocket.Connected)
+            {
+                try
+                {
+                    await clientSocket.SendAsync(data, SocketFlags.None);
+                }
+                catch (SocketException)
+                {
+                    disconnectedClients.Add(kvp.Key);
+                }
+                catch (ObjectDisposedException)
+                {
+                    disconnectedClients.Add(kvp.Key);
+                }
+            }
+            else
+            {
+                disconnectedClients.Add(kvp.Key);
+            }
+        }
+
+        foreach (var client in disconnectedClients)
+        {
+            RemoveClient(client);
+        }
+
+        await Task.CompletedTask;
+    }
+
     public void Stop()
     {
-        LogInformation("Stopping TCP Server...");
-        _listener.Stop();
+        _logger.LogInformation($"[{_serverIdentity}] Stopping TCP Server...");
+        _listenerSocket.Close();
 
-        foreach (var client in _clients.Values)
+        foreach (var clientSocket in _clients.Values)
         {
-            client.Close();
+            clientSocket.Close();
         }
 
         _clients.Clear();
-    }
-
-    private void LogInformation(string message, params object[] args)
-    {
-        _logger.LogInformation("[{Server}] " + message, new object[] { _serverIdentity }.Concat(args).ToArray());
-    }
-
-    private void LogError(Exception exception, string message, params object[] args)
-    {
-        _logger.LogError(exception, "[{Server}] " + message, new object[] { _serverIdentity }.Concat(args).ToArray());
     }
 }
