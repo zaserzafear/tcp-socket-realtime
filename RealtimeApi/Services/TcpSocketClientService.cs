@@ -79,31 +79,18 @@ public class TcpSocketClientService : BackgroundService
             try
             {
                 int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
+
                 if (bytesRead == 0)
                 {
-                    _logger.LogWarning("Server closed connection.");
+                    _logger.LogWarning("Server closed the connection.");
                     break;
                 }
 
-                var receivedText = _encoding.GetString(buffer, 0, bytesRead);
-                if (_tcpClientSetting.WriteLogRecievedMessage)
-                {
-                    _logger.LogInformation(receivedText);
-                }
-
-                var receivedBytes = buffer[..bytesRead];
-                if (string.Equals(_broadcastMethod, "byte", StringComparison.OrdinalIgnoreCase))
-                {
-                    await _tcpServerManager.BroadcastMessageAsync(receivedBytes);
-                }
-                else
-                {
-                    await _tcpServerManager.BroadcastMessageAsync(receivedText, _encoding);
-                }
+                HandleReceivedData(buffer, bytesRead, cancellationToken);
             }
-            catch (IOException ex)
+            catch (IOException ioEx)
             {
-                _logger.LogError(ex, "Connection lost during data receiving.");
+                _logger.LogError(ioEx, "Connection lost during data reception.");
                 break;
             }
             catch (Exception ex)
@@ -112,6 +99,31 @@ public class TcpSocketClientService : BackgroundService
                 break;
             }
         }
+    }
+
+    private void HandleReceivedData(byte[] buffer, int bytesRead, CancellationToken cancellationToken)
+    {
+        var receivedBytes = buffer[..bytesRead];
+        var receivedText = _encoding.GetString(receivedBytes);
+
+        if (_tcpClientSetting.WriteLogRecievedMessage)
+        {
+            _logger.LogInformation("Received: {ReceivedText}", receivedText);
+        }
+
+        if (IsBroadcastByteMode())
+        {
+            _tcpServerManager.BroadcastMessage(receivedBytes);
+        }
+        else
+        {
+            _tcpServerManager.BroadcastMessage(receivedText, _encoding);
+        }
+    }
+
+    private bool IsBroadcastByteMode()
+    {
+        return string.Equals(_broadcastMethod, "byte", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<IPAddress[]> ResolveDnsAsync(string host)

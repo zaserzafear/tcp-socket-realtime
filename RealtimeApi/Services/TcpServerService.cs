@@ -162,37 +162,43 @@ public class TcpServerService
         _maxConnections = Math.Max(_clients.Count, _maxConnections);
     }
 
-    public async Task BroadcastMessageAsync(byte[] data)
+    public Task BroadcastMessageAsync(byte[] data)
     {
         var disconnectedClients = new List<string>();
 
         foreach (var kvp in _clients)
         {
+            var clientId = kvp.Key;
             var clientSocket = kvp.Value;
 
-            if (clientSocket.Connected)
+            if (!clientSocket.Connected)
             {
-                try
-                {
-                    _ = clientSocket.SendAsync(data, SocketFlags.None);
-                }
-                catch
-                {
-                    disconnectedClients.Add(kvp.Key);
-                }
+                disconnectedClients.Add(clientId);
+                continue;
             }
-            else
-            {
-                disconnectedClients.Add(kvp.Key);
-            }
+
+            _ = SendAsyncFireAndForget(clientSocket, data, clientId);
         }
 
-        foreach (var client in disconnectedClients)
+        foreach (var clientId in disconnectedClients)
         {
-            RemoveClient(client);
+            RemoveClient(clientId);
         }
 
-        await Task.CompletedTask;
+        return Task.CompletedTask;
+    }
+
+    private async Task SendAsyncFireAndForget(Socket clientSocket, byte[] data, string clientId)
+    {
+        try
+        {
+            await clientSocket.SendAsync(data, SocketFlags.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending data to client {ClientId}", clientId);
+            RemoveClient(clientId);
+        }
     }
 
     public void Stop()

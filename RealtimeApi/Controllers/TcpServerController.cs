@@ -17,7 +17,7 @@ public class TcpServerController : ControllerBase
     }
 
     [HttpPost("broadcast")]
-    public async Task<IActionResult> Broadcast([FromBody] string message)
+    public IActionResult Broadcast([FromBody] string message)
     {
         if (string.IsNullOrWhiteSpace(message))
         {
@@ -25,7 +25,7 @@ public class TcpServerController : ControllerBase
         }
         _logger.LogInformation("Broadcasting message: {Message}", message);
 
-        await _tcpServer.BroadcastMessageAsync($"{message}{Environment.NewLine}");
+        _tcpServer.BroadcastMessage($"{message}{Environment.NewLine}");
         return Ok("Message broadcasted successfully.");
     }
 }

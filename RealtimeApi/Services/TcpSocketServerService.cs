@@ -149,19 +149,42 @@ public class TcpSocketServerService : IHostedService, ITcpServerManager
         await Task.CompletedTask;
     }
 
-    public async Task BroadcastMessageAsync(byte[] data)
+    public void BroadcastMessage(byte[] data)
     {
-        var tasks = _servers.Select(server => server.BroadcastMessageAsync(data));
-        await Task.WhenAll(tasks);
+        foreach (var server in _servers)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await server.BroadcastMessageAsync(data);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error broadcasting message to server.");
+                }
+            });
+        }
     }
 
-    public async Task BroadcastMessageAsync(string message, Encoding encoding = default!)
+    public void BroadcastMessage(string message, Encoding? encoding = null)
     {
         encoding ??= Encoding.UTF8;
-
         var data = encoding.GetBytes(message);
 
-        var tasks = _servers.Select(server => server.BroadcastMessageAsync(data));
-        await Task.WhenAll(tasks);
+        foreach (var server in _servers)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await server.BroadcastMessageAsync(data);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error broadcasting message to server.");
+                }
+            });
+        }
     }
 }
