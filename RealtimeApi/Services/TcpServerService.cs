@@ -174,13 +174,9 @@ public class TcpServerService
             {
                 try
                 {
-                    await clientSocket.SendAsync(data, SocketFlags.None);
+                    _ = clientSocket.SendAsync(data, SocketFlags.None);
                 }
-                catch (SocketException)
-                {
-                    disconnectedClients.Add(kvp.Key);
-                }
-                catch (ObjectDisposedException)
+                catch
                 {
                     disconnectedClients.Add(kvp.Key);
                 }

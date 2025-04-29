@@ -155,9 +155,11 @@ public class TcpSocketServerService : IHostedService, ITcpServerManager
         await Task.WhenAll(tasks);
     }
 
-    public async Task BroadcastMessageAsync(string message)
+    public async Task BroadcastMessageAsync(string message, Encoding encoding = default!)
     {
-        var data = Encoding.UTF8.GetBytes(message);
+        encoding ??= Encoding.UTF8;
+
+        var data = encoding.GetBytes(message);
 
         var tasks = _servers.Select(server => server.BroadcastMessageAsync(data));
         await Task.WhenAll(tasks);
