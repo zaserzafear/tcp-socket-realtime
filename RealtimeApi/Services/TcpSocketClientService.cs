@@ -1,8 +1,8 @@
-﻿using System.Net;
+﻿using Microsoft.Extensions.Options;
+using RealtimeApi.Configurations;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using Microsoft.Extensions.Options;
-using RealtimeApi.Configurations;
 
 namespace RealtimeApi.Services;
 
@@ -11,14 +11,14 @@ public class TcpSocketClientService : BackgroundService
     private readonly ILogger<TcpSocketClientService> _logger;
     private readonly TcpClientSetting _tcpClientSetting;
     private readonly Encoding _encoding;
-    private readonly ITcpServerManager tcpServerManager;
+    private readonly ITcpServerManager _tcpServerManager;
 
     public TcpSocketClientService(ILogger<TcpSocketClientService> logger, IOptions<TcpClientSetting> tcpClientSetting, ITcpServerManager tcpServerManager)
     {
         _logger = logger;
         _tcpClientSetting = tcpClientSetting.Value;
         _encoding = Encoding.GetEncoding("Windows-1252"); // Windows-1252 encoding created ONCE
-        this.tcpServerManager = tcpServerManager;
+        _tcpServerManager = tcpServerManager;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -83,12 +83,14 @@ public class TcpSocketClientService : BackgroundService
                     break;
                 }
 
-                var receivedText = _encoding.GetString(buffer, 0, bytesRead);
                 if (_tcpClientSetting.WriteLogRecievedMessage)
                 {
+                    var receivedText = _encoding.GetString(buffer, 0, bytesRead);
                     _logger.LogInformation(receivedText);
                 }
-                await tcpServerManager.BroadcastMessageAsync(receivedText);
+
+                var receivedBytes = buffer[..bytesRead];
+                await _tcpServerManager.BroadcastMessageAsync(receivedBytes);
             }
             catch (IOException ex)
             {

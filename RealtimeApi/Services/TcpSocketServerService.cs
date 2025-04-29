@@ -1,8 +1,8 @@
-﻿using System.Net;
+﻿using Microsoft.Extensions.Options;
+using RealtimeApi.Configurations;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using Microsoft.Extensions.Options;
-using RealtimeApi.Configurations;
 
 namespace RealtimeApi.Services;
 
@@ -147,6 +147,12 @@ public class TcpSocketServerService : IHostedService, ITcpServerManager
         }
 
         await Task.CompletedTask;
+    }
+
+    public async Task BroadcastMessageAsync(byte[] data)
+    {
+        var tasks = _servers.Select(server => server.BroadcastMessageAsync(data));
+        await Task.WhenAll(tasks);
     }
 
     public async Task BroadcastMessageAsync(string message)

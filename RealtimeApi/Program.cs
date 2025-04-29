@@ -1,7 +1,7 @@
 
-using System.Text;
 using RealtimeApi.Configurations;
 using RealtimeApi.Services;
+using System.Text;
 
 namespace RealtimeApi
 {
